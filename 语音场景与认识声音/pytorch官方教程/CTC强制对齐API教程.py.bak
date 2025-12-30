@@ -1,0 +1,296 @@
+# CTC 是 "Connectionist Temporal Classification"（连接主义时序分类）的缩写。CTC 是一种用于序列建模的技术，最初被用于语音识别，但后来也被应用于其他序列标记任务，如手写识别和自然语言处理。
+# https://pytorch.org/audio/stable/tutorials/ctc_forced_alignment_api_tutorial.html
+
+# 总结步骤:
+# 1. 准备音频数据
+# 2. 准备 wav2vec2 模型
+# 3. 使用 wav2vec2 模型提取音频特征 emissions
+# 4. 使用 CTC 强制对齐 API 对齐音频 emissions 和文本 token
+
+
+
+import torch
+import torchaudio
+import matplotlib.pyplot as plt
+import torchaudio.functional as F
+import pyaudio
+import time
+
+print(torch.__version__)
+print(torchaudio.__version__)
+
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+print(device)
+
+#####################################################################
+# 语音数据准备
+#####################################################################
+
+SPEECH_FILE = '../Lab41-SRI-VOiCES-src-sp0307-ch127535-sg0042.wav'
+waveform, _ = torchaudio.load(SPEECH_FILE)
+TRANSCRIPT = "i had that curiosity beside me at this moment".split()
+
+#####################################################################
+# 创建发射器 emissions
+#####################################################################
+
+# emissions 是音频每帧的特征，由特征提取算法，例如 MFCC 提取后，通过 Wav2Vec2 学习提取的特征
+
+# 加载预先训练的 Wav2Vec2 模型
+bundle = torchaudio.pipelines.MMS_FA
+
+model = bundle.get_model(with_star=False).to(device)
+with torch.inference_mode():
+    emission, _ = model(waveform.to(device))
+
+
+def plot_emission(emission):
+    fig, ax = plt.subplots()
+    ax.imshow(emission.cpu().T)
+    ax.set_title("Frame-wise class probabilities")
+    ax.set_xlabel("Time")
+    ax.set_ylabel("Labels")
+    fig.tight_layout()
+
+
+# plot_emission(emission[0])
+# plt.show()
+
+#####################################################################
+# 将文本标签转换成数字 token
+#####################################################################
+
+LABELS = bundle.get_labels(star=None)
+DICTIONARY = bundle.get_dict(star=None)
+
+
+# for k, v in DICTIONARY.items():
+#     print(f"{k}: {v}")
+#
+# tokenized_transcript = [DICTIONARY[c] for word in TRANSCRIPT for c in word]
+#
+# for t in tokenized_transcript:
+#     print(t, end=" ")
+# print()
+
+
+#####################################################################
+# 计算对齐 将音频帧和文本对齐
+#####################################################################
+
+def align(emission, tokens):
+    targets = torch.tensor([tokens], dtype=torch.int32, device=device)
+    # torch.Size([1, 37]) 目标token有37个
+    print(targets.shape)
+    # 形状张量(B, T, C)。其中 B 是批量大小，T 是输入长度，C 是字母表中的字符数（包括空格）
+    # torch.Size([1, 169, 28]) 音频特征有 169 帧
+    print(emission.shape)
+    # 强制对齐
+    # 需要和 CTC emisions 配合使用，也就是必须和 wav2vec2 模型预测结果一起使用
+    alignments, scores = F.forced_align(emission, targets, blank=0)
+    # torch.Size([1, 169]) 与 169 帧对齐后的 token
+    print(alignments.shape)
+    # torch.Size([1, 169]) 对齐评分
+    # scores 代表的是强制对齐过程中每个音频帧与对应标签的对齐评分。这些评分是对齐模型对每个音频帧和对应标签之间对齐的确定程度的度量。
+    print(scores.shape)
+
+    alignments, scores = alignments[0], scores[0]  # remove batch dimension for simplicity
+    scores = scores.exp()  # convert back to probability
+    return alignments, scores
+
+
+# aligned_tokens, alignment_scores = align(emission, tokenized_transcript)
+#
+# for i, (ali, score) in enumerate(zip(aligned_tokens, alignment_scores)):
+#     print(f"{i:3d}:\t{ali:2d} [{LABELS[ali]}], {score:.2f}")
+
+#####################################################################
+# 令牌级对齐 去掉重复的输出
+#####################################################################
+
+# token_spans = F.merge_tokens(aligned_tokens, alignment_scores)
+#
+# print("Token\tTime\tScore")
+# for s in token_spans:
+#     print(f"{LABELS[s.token]}\t[{s.start:3d}, {s.end:3d})\t{s.score:.2f}")
+
+
+#####################################################################
+# 单词对齐 将字母对齐成单词
+#####################################################################
+
+def unflatten(list_, lengths):
+    assert len(list_) == sum(lengths)
+    i = 0
+    ret = []
+    # 按照每个单词的长度取截取 token_spans 中的元素
+    for l in lengths:
+        ret.append(list_[i: i + l])
+        i += l
+    return ret
+
+
+# 将 token_spans 按照单词进行分组
+# word_spans = unflatten(token_spans, [len(word) for word in TRANSCRIPT])
+# print(word_spans)
+
+
+#####################################################################
+# 音频预览
+#####################################################################
+
+def preview(waveform, rate=16000):
+    # 创建 PyAudio 对象
+    p = pyaudio.PyAudio()
+
+    # 打开流
+    stream = p.open(format=pyaudio.paFloat32,
+                    channels=1,
+                    rate=int(rate),
+                    output=True)
+
+    # 将 tensor 转换为 numpy 数组，并将数据类型转换为浮点数
+    waveform_np = waveform.numpy().astype('float32')
+
+    # 写入流并播放
+    stream.write(waveform_np.tobytes())
+
+    # 停止流
+    stream.stop_stream()
+    stream.close()
+
+    # 关闭 PyAudio
+    p.terminate()
+
+
+# 计算平均位置得分
+def _score(spans):
+    return sum(s.score * len(s) for s in spans) / sum(len(s) for s in spans)
+
+
+# num_frames: wav2vec2模型输出的特征数
+def preview_word(waveform, spans, num_frames, transcript, sample_rate=bundle.sample_rate):
+    # num_frames 数量和原音频 waveform 的帧数不同，这里计算了一个比值 ratio
+    ratio = waveform.size(1) / num_frames
+    # 通过比值 ratio 缩放 token_span 起始和结束帧，计算出在原音频的起始和结束位置
+    x0 = int(ratio * spans[0].start)
+    x1 = int(ratio * spans[-1].end)
+    start_time = x0 / sample_rate
+    end_time = x1 / sample_rate
+    print(f"{transcript} ({_score(spans):.2f}): {start_time:.3f} - {end_time:.3f} sec")
+    # 截取部分频谱
+    segment = waveform[:, x0:x1]
+    return preview(segment, rate=sample_rate), end_time - start_time
+
+
+# num_frames = emission.size(1)
+
+
+# 播放完整内容
+# print(TRANSCRIPT)
+# preview(waveform)
+
+# 按字播放
+# preview_word(waveform, word_spans[0], num_frames, TRANSCRIPT[0])
+# preview_word(waveform, word_spans[1], num_frames, TRANSCRIPT[1])
+# preview_word(waveform, word_spans[2], num_frames, TRANSCRIPT[2])
+# preview_word(waveform, word_spans[3], num_frames, TRANSCRIPT[3])
+# preview_word(waveform, word_spans[4], num_frames, TRANSCRIPT[4])
+
+
+#####################################################################
+# 可视化
+#####################################################################
+
+def plot_alignments(waveform, token_spans, emission, transcript, sample_rate=bundle.sample_rate):
+    ratio = waveform.size(1) / emission.size(1) / sample_rate
+
+    fig, axes = plt.subplots(2, 1)
+    axes[0].imshow(emission[0].detach().cpu().T, aspect="auto")
+    axes[0].set_title("Emission")
+    axes[0].set_xticks([])
+
+    axes[1].specgram(waveform[0], Fs=sample_rate)
+    for t_spans, chars in zip(token_spans, transcript):
+        t0, t1 = t_spans[0].start + 0.1, t_spans[-1].end - 0.1
+        axes[0].axvspan(t0 - 0.5, t1 - 0.5, facecolor="None", hatch="/", edgecolor="white")
+        axes[1].axvspan(ratio * t0, ratio * t1, facecolor="None", hatch="/", edgecolor="white")
+        axes[1].annotate(f"{_score(t_spans):.2f}", (ratio * t0, sample_rate * 0.51), annotation_clip=False)
+
+        for span, char in zip(t_spans, chars):
+            t0 = span.start * ratio
+            axes[1].annotate(char, (t0, sample_rate * 0.55), annotation_clip=False)
+
+    axes[1].set_xlabel("time [second]")
+    axes[1].set_xlim([0, None])
+    fig.tight_layout()
+
+
+# plot_alignments(waveform, word_spans, emission, TRANSCRIPT)
+# plt.show()
+
+#####################################################################
+# blank 也就是 labels.txt 中的短横线，是有歧义和混淆的
+#####################################################################
+
+# 在 emissions 中，我们有很多 token 的值为 0，他们有两种含义
+# 1. 代表音频中的沉默片段，没有发出声音
+# 2. 代表音频中一个发音没有结束的重复片段
+
+# 所以 blank 标记产生了混淆，这在截取部分单词音频，并播放时，会明显的产生音频错误，无法播放完整内容
+# 为了解决这个问题，可以使用 <star> 星号 来缓解这个问题
+
+
+#####################################################################
+# 带有 <star> 标记的对齐
+#####################################################################
+
+# 添加星号
+DICTIONARY["*"] = len(DICTIONARY)
+# 每帧追加星号的特征数据
+star_dim = torch.zeros((1, emission.size(1), 1), device=emission.device, dtype=emission.dtype)
+emission = torch.cat((emission, star_dim), 2)
+
+assert len(DICTIONARY) == emission.shape[2]
+
+
+# 计算对齐，把前面的对齐过程整合一起
+def compute_alignments(emission, transcript, dictionary):
+    # 将所有字母转换成数字token
+    tokens = [dictionary[char] for word in transcript for char in word]
+    # 对齐
+    alignment, scores = align(emission, tokens)
+    # 融合每帧的 token，transcript 中有多少个字符，融合结果就有多少个
+    token_spans = F.merge_tokens(alignment, scores)
+    # 按单词分组
+    word_spans = unflatten(token_spans, [len(word) for word in transcript])
+    return word_spans
+
+
+# 定义 * 占位的转录文本，代表音频内容
+transcript = "* this moment".split()
+# transcript = "* that * this moment".split()
+# 对齐
+word_spans = compute_alignments(emission, transcript, DICTIONARY)
+# plot_alignments(waveform, word_spans, emission, transcript)
+
+num_frames = emission.size(1)
+
+# 播放部分内容
+# preview_word(waveform, word_spans[0], num_frames, transcript[0], sample_rate=bundle.sample_rate)
+# preview_word(waveform, word_spans[1], num_frames, transcript[1], sample_rate=bundle.sample_rate)
+# preview_word(waveform, word_spans[2], num_frames, transcript[2], sample_rate=bundle.sample_rate)
+# # preview_word(waveform, word_spans[3], num_frames, transcript[3], sample_rate=bundle.sample_rate)
+# # preview_word(waveform, word_spans[4], num_frames, transcript[4], sample_rate=bundle.sample_rate)
+
+#####################################################################
+# 不带 <star> 标记的对齐
+#####################################################################
+transcript = "this moment".split()
+word_spans = compute_alignments(emission, transcript, DICTIONARY)
+num_frames = emission.size(1)
+
+# 播放部分内容
+# 这里会发现 this 前面被多播放了部分音频，因为 blank 的混淆，被认为是 this 的一部分了
+preview_word(waveform, word_spans[0], num_frames, transcript[0], sample_rate=bundle.sample_rate)
+preview_word(waveform, word_spans[1], num_frames, transcript[1], sample_rate=bundle.sample_rate)
