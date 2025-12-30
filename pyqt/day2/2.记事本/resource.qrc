@@ -1,0 +1,20 @@
+<RCC>
+  <qresource prefix="res">
+    <file>icon/1.png</file>
+    <file>icon/color.png</file>
+    <file>icon/copy.png</file>
+    <file>icon/cut.png</file>
+    <file>icon/dir.png</file>
+    <file>icon/file.png</file>
+    <file>icon/font.png</file>
+    <file>icon/new.png</file>
+    <file>icon/open.png</file>
+    <file>icon/paste.png</file>
+    <file>icon/redo.png</file>
+    <file>icon/save.png</file>
+    <file>icon/textbold.png</file>
+    <file>icon/textitalic.png</file>
+    <file>icon/textunder.png</file>
+    <file>icon/undo.png</file>
+  </qresource>
+</RCC>

@@ -1,0 +1,14 @@
+<RCC>
+  <qresource prefix="res">
+    <file>imgs/icon/bofang.png</file>
+    <file>imgs/icon/danquxunhuan.png</file>
+    <file>imgs/icon/jingyin.png</file>
+    <file>imgs/icon/liebiaoxunhuan.png</file>
+    <file>imgs/icon/shangyiqu.png</file>
+    <file>imgs/icon/suijibofang.png</file>
+    <file>imgs/icon/xiayiqu.png</file>
+    <file>imgs/icon/yinliangjia.png</file>
+    <file>imgs/icon/yinliangjian.png</file>
+    <file>imgs/icon/zanting.png</file>
+  </qresource>
+</RCC>
