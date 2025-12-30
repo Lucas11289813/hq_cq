@@ -1,0 +1,59 @@
+import torch
+import torch.nn as nn
+import matplotlib.pyplot as plt
+
+
+class PositionalEncoding(nn.Module):
+    """Positional encoding."""
+
+    def __init__(self, num_hiddens, dropout, max_len=1000):
+        super().__init__()
+        self.dropout = nn.Dropout(dropout)
+        # Create a long enough P
+        # self.P: 位置编码在每个正弦或余弦曲线上的点，形状和输入形状一样，代表 1 批次，max_len 个字的词嵌入大小
+        # self.P: 中将保存对应的正弦或余弦函数值，所以第一个维度只需要是 1 就可以了
+        # max_len: 代表sin或cos曲线横坐标的最大长度
+        # num_hiddens: 代表词嵌入的长度
+        self.P = torch.zeros((1, max_len, num_hiddens))
+        # X: 这里是构造的正弦或余弦函数的输入参数，对应公式中 pos/10000 ** (2i/d_model)
+        # torch.arange(max_len, dtype=torch.float32) 这段代码代表的是公式中的 pos，并且此处转换成了列矩阵
+        # num_hiddens 后面的 2 代表步长，这里步长为 2 是为了和后面 0::2 1::2 对应步长
+        X = torch.arange(max_len, dtype=torch.float32).reshape(
+            -1, 1) / torch.pow(10000, torch.arange(
+            0, num_hiddens, 2, dtype=torch.float32) / num_hiddens)
+        # 0::2 代表切片，切片完整写法是 a:b:c
+        # a: 开始的索引
+        # b: 结束的索引
+        # c: 步长
+        # 此处 0::2 结束索引省略，从 0 开始，步长为 2
+        self.P[:, :, 0::2] = torch.sin(X)
+        self.P[:, :, 1::2] = torch.cos(X)
+
+    def forward(self, X):
+        # self.P[:, :X.shape[1], :] 取出对应位置的正弦或余弦值
+        # X + self.P[:, :X.shape[1], :].to(X.device) 这个操作会让 X 中每个批次的数据都添加一个相同的位置值
+        X = X + self.P[:, :X.shape[1], :].to(X.device)
+        return self.dropout(X)
+
+
+encoding_dim, num_steps = 32, 60
+pos_encoding = PositionalEncoding(encoding_dim, 0)
+# torch.zeros((1, num_steps, encoding_dim)): 这个模拟的是 1 个批次的 num_steps 个单词组成的句子的词嵌入，作为位置编码的输入
+X = pos_encoding(torch.zeros((1, num_steps, encoding_dim)))
+# 取出输入 X 对应长度的正弦或余弦值
+P = pos_encoding.P[:, :X.shape[1], :]
+
+fig, ax = plt.subplots(figsize=(6, 2.5))
+# 从 encoding_dim 个正弦余弦曲线中，取出其中 4 条线的纵坐标值
+# P[0, :, 6:10] 形状是 (num_steps, 4)
+# 通过 .T 进行转置，形状变为 (4, num_steps)
+line_y = P[0, :, 6:10].T
+
+# 绘制位置编码所采用的曲线
+for i in range(line_y.shape[0]):
+    ax.plot(torch.arange(num_steps), line_y[i])
+
+# ax.set_legend(["Col %d" % d for d in torch.arange(6, 10)])
+ax.set_xlabel('Row (position)')
+
+plt.show()
